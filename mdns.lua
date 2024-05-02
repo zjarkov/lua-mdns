@@ -230,8 +230,9 @@ local function mdns_parse(service, data, answers)
         -- next answer record
         offset = offset + 10 + (data:byte(offset + 8) * 256 + data:byte(offset + 9))
     end
--- evaluate additionals section
-    if (header.arcount > 0) then
+
+    -- evaluate additionals section
+    if header.arcount > 0 then
         for i=1, header.arcount do
             if offset > len then
                 return nil, 'truncated'
@@ -287,7 +288,7 @@ local function mdns_results(service, answers)
         local pos = k:find('%.')
         if pos and pos > 1 and pos < #k then
             local name, svc = k:sub(1, pos - 1), k:sub(pos + 1)
-            if mdns_is_meta_query(service) or svc == service then
+            if mdns_is_meta_query(service) or svc == service:sub(-#svc) then
                 if v.target then
                     if answers.a[v.target] then
                         v.ipv4 = answers.a[v.target]
