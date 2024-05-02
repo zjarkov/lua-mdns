@@ -278,13 +278,12 @@ end
 ---@param answers table Table of answers from query
 ---@return table|nil services Formatted table of services
 local function mdns_results(service, answers)
-    local services = {}
-
     if not answers.srv then
-        return nil
+        return
     end
 
-    for k,v in pairs(answers.srv) do
+    local services = {}
+    for k, v in pairs(answers.srv) do
         local pos = k:find('%.')
         if pos and pos > 1 and pos < #k then
             local name, svc = k:sub(1, pos - 1), k:sub(pos + 1)
@@ -293,18 +292,32 @@ local function mdns_results(service, answers)
                     if answers.a[v.target] then
                         v.ipv4 = answers.a[v.target]
                     end
+
                     if answers.aaaa[v.target] then
                         v.ipv6 = answers.aaaa[v.target]
                     end
+
                     local ldomain_len = #LOCAL_DOMAIN
                     if v.target:sub(-ldomain_len) == LOCAL_DOMAIN then
                         v.hostname = v.target:sub(1, -ldomain_len-1)
                     end
+
                     v.target = nil
                 end
+
                 v.service = svc
                 v.name = name
-                v.text = answers.txt[k]
+
+                v.text = {}
+                local exist = {}
+                for _, record in ipairs(answers.txt[k]) do
+                    -- avoid duplicates from multiple responses via more netvork interfaces
+                    if not exist[record] then
+                        exist[record] = true
+                        table.insert(v.text, record)
+                    end
+                end
+
                 services[k] = v
             end
         end
