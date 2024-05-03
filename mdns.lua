@@ -93,6 +93,107 @@ local function mdns_make_query(service)
     return data..string.char(0)..'\000\012'..'\000\001'
 end
 
+--- Helper function: parse DNS name field, supports pointers
+-- @string data Received datagram
+-- @int offset Offset within datagram (1-based)
+-- @treturn string parsed DNS name
+-- @treturn int offset of first byte behind name (1-based)
+local function parse_name(data, offset)
+    local n, d, l = '', '', data:byte(offset)
+    while l > 0 do
+        if l >= 192 then -- pointer
+            local p = (l % 192) * 256 + data:byte(offset + 1)
+            return n..d..parse_name(data, p + 1), offset + 2
+        end
+        n = n..d..data:sub(offset + 1, offset + l)
+        offset = offset + l + 1
+        l = data:byte(offset)
+        d = '.'
+    end
+    return n, offset + 1
+end
+
+--- Helper function: check if a single bit is set in a number `val`
+-- @number val A number to be checked
+-- @number mask Mask (single bit only)
+-- @treturn bool `true` if bit is set, otherwise `false`
+local function bit_set(val, mask)
+    return val % (mask + mask) >= mask
+end
+
+--- Helper function: Process the mDNS answer.
+--
+-- Parse the answer of `name` at given `offset` into `answers` table.
+--
+-- @string name DNS name
+-- @tparam table answers Table for parsed data
+-- @string data Data to be parsed
+-- @int offset Offset of data to be parsed
+--
+-- @treturn bool `true` after successfull parsing
+-- @error Error message
+local function process_answer(name, answers, data, offset)
+    local type = data:byte(offset + 0) * 256 + data:byte(offset + 1)
+    local rdlength = data:byte(offset + 8) * 256 + data:byte(offset + 9)
+    local rdoffset = offset + 10
+
+    -- A record (IPv4 address)
+    if type == DNS.RR.A then
+        if rdlength ~= 4 then
+            return nil, 'bad RDLENGTH with A record'
+        end
+        answers.a[name] = string.format('%d.%d.%d.%d', data:byte(rdoffset, rdoffset + 3))
+    -- PTR record (pointer)
+    elseif type == DNS.RR.PTR then
+        local target = parse_name(data, rdoffset)
+        table.insert(answers.ptr, target)
+    -- AAAA record (IPv6 address)
+    elseif type == DNS.RR.AAAA then
+        if rdlength ~= 16 then
+            return nil, 'bad RDLENGTH with AAAA record'
+        end
+
+        local aaaa = string.format('%x', data:byte(rdoffset)*256 + data:byte(rdoffset + 1))
+        for offs = rdoffset+2, rdoffset+14, 2 do
+            aaaa = aaaa..':'..string.format('%x', data:byte(offs)*256 + data:byte(offs + 1))
+        end
+
+        -- compress IPv6 address
+        for _, s in ipairs{ ':0:0:0:0:0:0:0:', ':0:0:0:0:0:0:', ':0:0:0:0:0:', ':0:0:0:0:', ':0:0:0:', ':0:0:' } do
+            local r = aaaa:gsub(s, '::', 1)
+            if r ~= aaaa then
+                aaaa = r
+                break
+            end
+        end
+        answers.aaaa[name] = aaaa
+    -- SRV record (service location)
+    elseif type == DNS.RR.SRV then
+        if rdlength < 6 then
+            return nil, 'bad RDLENGTH with SRV record'
+        end
+        answers.srv[name] = {
+            target = parse_name(data, rdoffset + 6),
+            port = data:byte(rdoffset + 4) * 256 + data:byte(rdoffset + 5)
+        }
+    -- TXT Text strings
+    elseif type == DNS.RR.TXT then
+        answers.txt[name] = answers.txt[name] or {}
+
+        local txtoffset = rdoffset
+        while txtoffset < rdoffset + rdlength do
+            local txtlength = data:byte(txtoffset)
+            txtoffset = txtoffset + 1
+
+            local txt = data:sub(txtoffset, txtoffset + txtlength - 1)
+            table.insert(answers.txt[name], txt)
+            txtoffset = txtoffset + txtlength
+        end
+    end
+
+    return true
+end
+
 --- Parse mDNS response `data`.
 --
 -- Parse `data` obtained as mDNS response into `answers` structure.
@@ -103,34 +204,6 @@ end
 -- @treturn table `answers` structure
 -- @error Error description
 local function mdns_parse(data, answers)
-    --- Helper function: parse DNS name field, supports pointers
-    -- @string data Received datagram
-    -- @int offset Offset within datagram (1-based)
-    -- @treturn string parsed name
-    -- @treturn int offset of first byte behind name (1-based)
-    local function parse_name(data, offset)
-        local n, d, l = '', '', data:byte(offset)
-        while l > 0 do
-            if l >= 192 then -- pointer
-                local p = (l % 192) * 256 + data:byte(offset + 1)
-                return n..d..parse_name(data, p + 1), offset + 2
-            end
-            n = n..d..data:sub(offset + 1, offset + l)
-            offset = offset + l + 1
-            l = data:byte(offset)
-            d = '.'
-        end
-        return n, offset + 1
-    end
-
-    --- Helper function: check if a single bit is set in a number `val`
-    -- @number val A number to be checked
-    -- @number mask Mask (single bit only)
-    -- @treturn bool `true` if bit is set, otherwise `false`
-    local function bit_set(val, mask)
-        return val % (mask + mask) >= mask
-    end
-
     -- decode and check header
     if not data then
         return nil, 'no data'
@@ -171,78 +244,6 @@ local function mdns_parse(data, answers)
         end
     end
 
-    --- Helper function: Process the mDNS answer.
-    --
-    -- Parse the answer of `name` at given `offset` into `answers` table.
-    --
-    -- @tparam table answers Table for parsed data
-    -- @string data Data to be parsed
-    -- @int offset Offset of data to be parsed
-    --
-    -- @treturn bool `true` after successfull parsing
-    -- @error Error message
-    local function process_answer(answers, data, offset)
-        local type = data:byte(offset + 0) * 256 + data:byte(offset + 1)
-        local rdlength = data:byte(offset + 8) * 256 + data:byte(offset + 9)
-        local rdoffset = offset + 10
-
-        -- A record (IPv4 address)
-        if type == DNS.RR.A then
-            if rdlength ~= 4 then
-                return nil, 'bad RDLENGTH with A record'
-            end
-            answers.a[name] = string.format('%d.%d.%d.%d', data:byte(rdoffset, rdoffset + 3))
-        -- PTR record (pointer)
-        elseif type == DNS.RR.PTR then
-            local target = parse_name(data, rdoffset)
-            table.insert(answers.ptr, target)
-        -- AAAA record (IPv6 address)
-        elseif type == DNS.RR.AAAA then
-            if rdlength ~= 16 then
-                return nil, 'bad RDLENGTH with AAAA record'
-            end
-
-            local aaaa = string.format('%x', data:byte(rdoffset)*256 + data:byte(rdoffset + 1))
-            for offs = rdoffset+2, rdoffset+14, 2 do
-                aaaa = aaaa..':'..string.format('%x', data:byte(offs)*256 + data:byte(offs + 1))
-            end
-
-            -- compress IPv6 address
-            for _, s in ipairs{ ':0:0:0:0:0:0:0:', ':0:0:0:0:0:0:', ':0:0:0:0:0:', ':0:0:0:0:', ':0:0:0:', ':0:0:' } do
-                local r = aaaa:gsub(s, '::', 1)
-                if r ~= aaaa then
-                    aaaa = r
-                    break
-                end
-            end
-            answers.aaaa[name] = aaaa
-        -- SRV record (service location)
-        elseif type == DNS.RR.SRV then
-            if rdlength < 6 then
-                return nil, 'bad RDLENGTH with SRV record'
-            end
-            answers.srv[name] = {
-                target = parse_name(data, rdoffset + 6),
-                port = data:byte(rdoffset + 4) * 256 + data:byte(rdoffset + 5)
-            }
-        -- TXT Text strings
-        elseif type == DNS.RR.TXT then
-            answers.txt[name] = answers.txt[name] or {}
-
-            local txtoffset = rdoffset
-            while txtoffset < rdoffset + rdlength do
-                local txtlength = data:byte(txtoffset)
-                txtoffset = txtoffset + 1
-
-                local txt = data:sub(txtoffset, txtoffset + txtlength - 1)
-                table.insert(answers.txt[name], txt)
-                txtoffset = txtoffset + txtlength
-            end
-        end
-
-        return true
-    end
-
     -- evaluate answer section
     for _ = 1, header.ancount do
         if offset > len then
@@ -250,7 +251,7 @@ local function mdns_parse(data, answers)
         end
 
         name, offset = parse_name(data, offset)
-        local worked, err = process_answer(answers, data, offset)
+        local worked, err = process_answer(name, answers, data, offset)
 
         if worked == nil then
             return nil, err
@@ -268,7 +269,7 @@ local function mdns_parse(data, answers)
             end
 
             name, offset = parse_name(data, offset)
-            local worked, err = process_answer(answers, data, offset)
+            local worked, err = process_answer(name, answers, data, offset)
 
             if worked == nil then
                 return nil, err
