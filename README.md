@@ -18,31 +18,32 @@ Multicast DNS (mDNS) service browser implemented in pure Lua. mDNS provides the 
 ## Example Usage
 
 The code below queries all mDNS services available on the local network.
+```lua
+local mdns = require('mdns')
 
-    local mdns = require('mdns')
-
-    -- DNS service discovery (defaults: all services, 2 seconds timeout)
-    local res = mdns.query()
-    if (res) then
-        for k,v in pairs(res) do
-            -- output key name
-            print(k)
-            local function print_table(t, indent)
-                for k,v in pairs(t) do
-                    -- output service descriptor fields
-                    if (type(v) == 'table') then
-                        print(string.rep('  ',indent)..k..':')
-                        print_table(v, indent + 1)
-                    else
-                        print(string.rep('  ',indent)..k..': '..v)
-                    end
+-- DNS service discovery (defaults: all services, 2 seconds timeout)
+local res = mdns.query()
+if res then
+    for k, v in pairs(res) do
+        -- output key name
+        print(k)
+        local function print_table(t, indent)
+            for k, v in pairs(t) do
+                -- output service descriptor fields
+                if type(v) == 'table' then
+                    print(string.rep('  ', indent)..k..':')
+                    print_table(v, indent + 1)
+                else
+                    print(string.rep('  ', indent)..k..': '..v)
                 end
             end
-            print_table(v, 1)
         end
-    else
-        print('no result')
+        print_table(v, 1)
     end
+else
+    print('no result')
+end
+```
 
 If called without parameters, `mdns.query` returns all available services after the default timeout of 2 seconds. Additional examples can be found in the `examples` subdirectory.
 
@@ -55,9 +56,9 @@ The module exports _mdns.query_, mdns.query_async, and _mdns.socket_
 ### mdns.query
 
 **Usage**
-
-    result = mdns.query([<service>, [<timeout>]])
-
+```lua
+result = mdns.query([<service>, [<timeout>]])
+```
 
 **Parameters**
 
@@ -89,8 +90,9 @@ _mdns\.resolve_ returns whatever information the mDNS daemons provide. The prese
 Allows the use of platform appropriate timer options. Specifically, if available, an asynchronous timer.
 
 **Usage**
-
-    tick, finalise = mdns.query_async([<service>])
+```lua
+tick, finalise = mdns.query_async([<service>])
+```
 
 **Parameters**
 
@@ -112,36 +114,37 @@ It will clean up and return a table of services.
 **Example**
 
 The `timer` library here is given as an example, please use a platform appropriate library:
+```lua
+local mdns = require('mdns')
+local ticker = require('timer')
+local timeout = require('timer')
 
-    local mdns = require('mdns')
-    local ticker = require('timer')
-    local timeout = require('timer')
+-- Query all MDNS services
+local mdns_tick, mdns_finalise = mdns.query_async()
 
-    -- Query all MDNS services
-    local mdns_tick, mdns_finalise = mdns.query_async()
+-- Setup ticker
+ticker.single_shot = false
+ticker.interval = 0.01
+ticker.handler = function()
+    mdns_tick()
+end
+ticker:start()
 
-    -- Setup ticker
-    ticker.single_shot = false
-    ticker.interval = 0.01
-    ticker.handler = function()
-        mdns_tick()
-    end
-    ticker:start()
+-- Setup timeout
+timeout.single_shot = true
+timeout.interval = 2.0
+timeout.handler = function()
+    ticker:stop()
 
-    -- Setup timeout
-    timeout.single_shot = true
-    timeout.interval = 2.0
-    timeout.handler = function()
-        ticker:stop()
-
-        local res = mdns_finalise()
-        if (res) then
-            for k,v in pairs(res) do
-                <... use results>
-            end
+    local res = mdns_finalise()
+    if (res) then
+        for k,v in pairs(res) do
+            <... use results>
         end
     end
-    timeout:start()
+end
+timeout:start()
+```
 
 ### mdns.socket
 
@@ -175,24 +178,24 @@ e.g. Use IPv6, unicast IPv4, some other transport, or even a socket library othe
     Tear down the socket
 
 **Example (IPv6)**
+```lua
+local mdns = require('mdns')
 
-    local mdns = require('mdns')
+mdns.socket.PEER.IP = 'ff02::fb'
+mdns.socket.setup = function(self, timeout)
+    local socket = require('socket')
+    self.udp = socket.udp6()
+    assert(self.udp:setoption('ipv6-add-membership', { multiaddr = self.PEER.IP }))
+    assert(self.udp:settimeout(0.1))
+end
+mdns.socket.teardown = function(self)
+    assert(self.udp:setoption("ipv6-drop-membership", { multiaddr = self.PEER.IP }))
+    assert(self.udp:close())
+    self.udp = nil
+end
 
-    mdns.socket.PEER.IP = 'ff02::fb'
-    mdns.socket.setup = function(self, timeout)
-        local socket = require('socket')
-        self.udp = socket.udp6()
-        assert(self.udp:setoption('ipv6-add-membership', { multiaddr = self.PEER.IP }))
-        assert(self.udp:settimeout(0.1))
-    end
-    mdns.socket.teardown = function(self)
-        assert(self.udp:setoption("ipv6-drop-membership", { multiaddr = self.PEER.IP }))
-        assert(self.udp:close())
-        self.udp = nil
-    end
-
-    local res = mdns.resolve()
-
+local res = mdns.resolve()
+```
 
 ## License
 

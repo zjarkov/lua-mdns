@@ -57,7 +57,7 @@ local LOCAL_DOMAIN = '.local'
 ---@param service string Service name to check
 ---@return boolean
 local function mdns_is_meta_query(service)
-    return (service:sub(1,#SERVICE_TYPE_META_QUERY) == SERVICE_TYPE_META_QUERY)
+    return service:sub(1,#SERVICE_TYPE_META_QUERY) == SERVICE_TYPE_META_QUERY
 end
 
 local DNS = {
@@ -90,8 +90,8 @@ local function mdns_parse(service, data, answers)
     -- @return  offset of first byte behind name (1-based)
     local function parse_name(data, offset)
         local n,d,l = '', '', data:byte(offset)
-        while (l > 0) do
-            if (l >= 192) then -- pointer
+        while l > 0 do
+            if l >= 192 then -- pointer
                 local p = (l % 192) * 256 + data:byte(offset + 1)
                 return n..d..parse_name(data, p + 1), offset + 2
             end
@@ -112,11 +112,11 @@ local function mdns_parse(service, data, answers)
     end
 
     -- decode and check header
-    if (not data) then
+    if not data then
         return nil, 'no data'
     end
     local len = #data
-    if (len < 12) then
+    if len < 12 then
         return nil, 'truncated'
     end
 
@@ -128,22 +128,22 @@ local function mdns_parse(service, data, answers)
         nscount = data:byte(9) * 256 + data:byte(10),
         arcount = data:byte(11) * 256 + data:byte(12),
     }
-    if (not bit_set(header.flags, 0x8000)) then
+    if not bit_set(header.flags, 0x8000) then
         return nil, 'not a reply'
     end
-    if (bit_set(header.flags, 0x0200)) then
+    if bit_set(header.flags, 0x0200) then
         return nil, 'TC bit is set'
     end
-    if (header.ancount == 0) then
+    if header.ancount == 0 then
         return nil, 'no answer records'
     end
 
     -- skip question section
     local name
     local offset = 13
-    if (header.qdcount > 0) then
+    if header.qdcount > 0 then
         for i=1, header.qdcount do
-            if (offset > len) then
+            if offset > len then
                 return nil, 'truncated'
             end
             name, offset = parse_name(data, offset)
@@ -159,7 +159,7 @@ local function mdns_parse(service, data, answers)
 
         -- A record (IPv4 address)
         if type == DNS.RR.A then
-            if (rdlength ~= 4) then
+            if rdlength ~= 4 then
                 return nil, 'bad RDLENGTH with A record'
             end
             answers.a[name] = string.format('%d.%d.%d.%d', data:byte(rdoffset, rdoffset+3))
@@ -169,7 +169,7 @@ local function mdns_parse(service, data, answers)
             table.insert(answers.ptr, target)
         -- AAAA record (IPv6 address)
         elseif type == DNS.RR.AAAA then
-            if (rdlength ~= 16) then
+            if rdlength ~= 16 then
                 return nil, 'bad RDLENGTH with AAAA record'
             end
 
@@ -181,7 +181,7 @@ local function mdns_parse(service, data, answers)
             -- compress IPv6 address
             for _, s in ipairs{ ':0:0:0:0:0:0:0:', ':0:0:0:0:0:0:', ':0:0:0:0:0:', ':0:0:0:0:', ':0:0:0:', ':0:0:' } do
                 local r = aaaa:gsub(s, '::', 1)
-                if (r ~= aaaa) then
+                if r ~= aaaa then
                     aaaa = r
                     break
                 end
@@ -189,7 +189,7 @@ local function mdns_parse(service, data, answers)
             answers.aaaa[name] = aaaa
         -- SRV record (service location)
         elseif type == DNS.RR.SRV then
-            if (rdlength < 6) then
+            if rdlength < 6 then
                 return nil, 'bad RDLENGTH with SRV record'
             end
             answers.srv[name] = {
@@ -201,7 +201,7 @@ local function mdns_parse(service, data, answers)
             answers.txt[name] = answers.txt[name] or {}
 
             local txtoffset = rdoffset
-            while (txtoffset < rdoffset + rdlength) do
+            while txtoffset < rdoffset + rdlength do
                 local txtlength = data:byte(txtoffset)
                 txtoffset = txtoffset + 1
 
@@ -216,7 +216,7 @@ local function mdns_parse(service, data, answers)
 
     -- evaluate answer section
     for i=1, header.ancount do
-        if (offset > len) then
+        if offset > len then
             return nil, 'truncated'
         end
 
@@ -230,10 +230,11 @@ local function mdns_parse(service, data, answers)
         -- next answer record
         offset = offset + 10 + (data:byte(offset + 8) * 256 + data:byte(offset + 9))
     end
--- evaluate additionals section
-    if (header.arcount > 0) then
+
+    -- evaluate additionals section
+    if header.arcount > 0 then
         for i=1, header.arcount do
-            if (offset > len) then
+            if offset > len then
                 return nil, 'truncated'
             end
 
@@ -261,9 +262,9 @@ local function mdns_recv_and_parse(service, answers)
     end
 
     local data = mdns.socket:recv()
-    if (data) then
+    if data then
         mdns_parse(service, data, answers)
-        if (mdns_is_meta_query(service)) then
+        if mdns_is_meta_query(service) then
             for _, ptr in ipairs(answers.ptr) do
                 mdns.socket:send(mdns_make_query(ptr))
             end
@@ -277,32 +278,46 @@ end
 ---@param answers table Table of answers from query
 ---@return table|nil services Formatted table of services
 local function mdns_results(service, answers)
-    local services = {}
-
-    if (answers.srv == nil) then
-        return nil
+    if not answers.srv then
+        return
     end
 
-    for k,v in pairs(answers.srv) do
+    local services = {}
+    for k, v in pairs(answers.srv) do
         local pos = k:find('%.')
-        if (pos and (pos > 1) and (pos < #k)) then
+        if pos and pos > 1 and pos < #k then
             local name, svc = k:sub(1, pos - 1), k:sub(pos + 1)
-            if (mdns_is_meta_query(service)) or (svc == service) then
-                if (v.target) then
-                    if (answers.a[v.target]) then
+            if mdns_is_meta_query(service) or svc == service:sub(-#svc) then
+                if v.target then
+                    if answers.a[v.target] then
                         v.ipv4 = answers.a[v.target]
                     end
-                    if (answers.aaaa[v.target]) then
+
+                    if answers.aaaa[v.target] then
                         v.ipv6 = answers.aaaa[v.target]
                     end
-                    if (v.target:sub(-#LOCAL_DOMAIN) == LOCAL_DOMAIN) then
-                        v.hostname = v.target:sub(1, #v.target - 6)
+
+                    local ldomain_len = #LOCAL_DOMAIN
+                    if v.target:sub(-ldomain_len) == LOCAL_DOMAIN then
+                        v.hostname = v.target:sub(1, -ldomain_len-1)
                     end
+
                     v.target = nil
                 end
+
                 v.service = svc
                 v.name = name
-                v.text = answers.txt[k]
+
+                v.text = {}
+                local exist = {}
+                for _, record in ipairs(answers.txt[k]) do
+                    -- avoid duplicates from multiple responses via more netvork interfaces
+                    if not exist[record] then
+                        exist[record] = true
+                        table.insert(v.text, record)
+                    end
+                end
+
                 services[k] = v
             end
         end
@@ -347,10 +362,8 @@ mdns.socket = {
     ---@return string|nil datagram Response datagram
     recv = function(self)
         local datagram, peeraddr, peerport = self.udp:receivefrom()
-        if (peerport == self.PEER.PORT) then
+        if peerport == self.PEER.PORT then
             return datagram
-        else
-            return nil
         end
     end,
 
@@ -372,7 +385,7 @@ local function mdns_quantify_query(service)
     end
 
     -- append .local if needed
-    if (service:sub(-#LOCAL_DOMAIN) ~= LOCAL_DOMAIN) then
+    if service:sub(-#LOCAL_DOMAIN) ~= LOCAL_DOMAIN then
         service = service..LOCAL_DOMAIN
     end
 
@@ -415,7 +428,7 @@ function mdns.query(service, timeout)
     -- collect responses until timeout
     local answers = {}
     local start = os.time()
-    while (os.time() - start < timeout) do
+    while os.time() - start < timeout do
         mdns_recv_and_parse(service, answers)
     end
 
