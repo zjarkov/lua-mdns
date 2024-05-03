@@ -9,11 +9,15 @@ Multicast DNS (mDNS) service browser implemented in pure Lua. mDNS provides the 
 
 * Lua 5.2 or later
 * LuaSocket 2.1 or later (currently tested on 3.0rc1)
+* LDoc 1.5 or later - for source code documentation
 
 **Installation using LuaRocks package manager**
 
     $ luarocks make mdns-2.0-1.rockspec
 
+### Generate source code documentation
+    $ luarocks install ldoc
+    $ ldoc .
 
 ## Example Usage
 
