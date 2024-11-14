@@ -440,6 +440,8 @@ end
 -- @number[opt] timeout Number of seconds to wait for mDNS responses. The default
 --   timeout is 2 seconds if this parameter is not specified.
 --
+-- @int[opt=100] maxresp Maximal number of mDNS responses to process.
+--
 -- @treturn table Table of mDNS services. Entry keys are service identifiers.
 --   Each entry is a table containing all or a subset of the following elements:
 --
@@ -450,7 +452,7 @@ end
 --   * __`ipv4`__: IPv4 address
 --   * __`ipv6`__: IPv6 address
 --   * __`text`__: Table of text record(s)
-function mdns.query(service, timeout)
+function mdns.query(service, timeout, maxresp)
     -- quantify query or return special meta-query if no service name specified
     service = mdns_quantify_query(service)
 
@@ -463,11 +465,14 @@ function mdns.query(service, timeout)
     -- send query
     mdns.socket:send(mdns_make_query(service))
 
-    -- collect responses until timeout
+    -- collect responses until timeout or `maxresp` exceeds
+    maxresp = maxresp or 100
+    local resp = 0
     local answers = {}
     local start = os.time()
-    while os.time() - start < timeout do
+    while os.time() - start < timeout and resp < maxresp do
         mdns_recv_and_parse(service, answers)
+        resp = resp + 1
     end
 
     -- cleanup socket
